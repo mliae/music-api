@@ -93,6 +93,35 @@
   audio.sd-audio { width: 100%; margin: 16px 0 12px; }
   .sd-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
+  /* 标签管理 */
+  .tag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px 5px 14px; font-size: 13px; }
+  .tag-chip:hover { border-color: var(--accent); }
+  .tag-chip .num { color: var(--muted); font-size: 12px; }
+  .tag-chip button { background: none; border: none; color: var(--muted); padding: 0 4px; border-radius: 4px; line-height: 1; }
+  .tag-chip button:hover { color: var(--text); }
+  .tag-chip .del:hover { color: var(--accent2); }
+
+  /* 标签详情弹窗：双栏（标签内 / 可添加） */
+  .tm-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .tm-head h3 { font-size: 16px; }
+  .tm-url { color: var(--muted); font-size: 12px; margin-bottom: 12px; word-break: break-all; }
+  .tm-url .mono { color: var(--blue); }
+  .tm-tip { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .tm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 640px) { .tm-grid { grid-template-columns: 1fr; } }
+  .tm-col h4 { font-size: 13px; color: var(--muted); font-weight: normal; margin-bottom: 8px; }
+  .tm-col input { width: 100%; margin-bottom: 8px; }
+  .tm-list { max-height: 340px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .tm-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .tm-row:last-child { border-bottom: none; }
+  .tm-row img { width: 34px; height: 34px; border-radius: 5px; object-fit: cover; background: var(--panel2); flex: none; }
+  .tm-row .info { flex: 1; min-width: 0; }
+  .tm-row .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tm-row .ar { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tm-row .cur { font-size: 11px; color: var(--yellow); flex: none; }
+  .tm-row button { flex: none; }
+
   .subtabs { display: flex; gap: 6px; margin-bottom: 14px; }
   .subtabs button { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 6px 14px; border-radius: 8px; }
   .subtabs button.active { color: #fff; border-color: var(--accent); background: rgba(236,65,65,.12); }
@@ -182,6 +211,15 @@
           <button class="btn primary" id="url-btn">转存入库</button>
         </div>
       </div>
+    </div>
+
+    <div class="panel">
+      <h2>标签（歌单）管理 <span class="hint">一个标签 = 一个歌单，歌单地址 /playlist.json?tag=标签名</span></h2>
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="tag-new-name" placeholder="新标签名，如：音乐胶囊" style="max-width:240px">
+        <button class="btn primary" id="tag-new-btn">新建标签</button>
+      </div>
+      <div class="tag-chips" id="tag-chips"><span class="muted" style="font-size:12px">加载中…</span></div>
     </div>
 
     <div class="panel">
@@ -277,6 +315,33 @@
       <button class="btn primary" id="sd-ingest">入库到曲库</button>
       <button class="btn" id="sd-close">关 闭</button>
       <span class="muted" id="sd-hint" style="font-size:12px;align-self:center"></span>
+    </div>
+  </div>
+</div>
+
+<!-- 标签管理弹窗 -->
+<div class="modal-mask" id="tag-modal" style="display:none">
+  <div class="modal wide">
+    <div class="tm-head">
+      <h3 id="tm-name"></h3>
+      <button class="btn small" id="tm-rename">重命名</button>
+      <button class="btn small danger" id="tm-delete">删除标签</button>
+    </div>
+    <div class="tm-url">歌单地址：<span class="mono" id="tm-url"></span> <button class="btn small" id="tm-copy">复制</button></div>
+    <div class="tm-tip">每首歌同时只能属于一个标签；把歌曲添加到本标签时，会自动从原标签移出。删除标签不会删除歌曲。</div>
+    <div class="tm-grid">
+      <div class="tm-col">
+        <h4 id="tm-in-title">标签内歌曲</h4>
+        <div class="tm-list" id="tm-in-list"></div>
+      </div>
+      <div class="tm-col">
+        <h4>从曲库添加</h4>
+        <input type="text" id="tm-filter" placeholder="按歌名 / 歌手过滤">
+        <div class="tm-list" id="tm-out-list"></div>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px">
+      <button class="btn" id="tm-close">完 成</button>
     </div>
   </div>
 </div>
@@ -512,6 +577,141 @@ $("#url-btn").onclick = async () => {
   finally { btn.disabled = false; btn.textContent = "转存入库"; }
 };
 
+/* ---------- 标签（歌单）管理 ---------- */
+let tagList = [];
+async function loadTags() {
+  try {
+    const d = await api("/tags");
+    tagList = d.list || [];
+  } catch { tagList = []; }
+  renderTags();
+  // 标签弹窗开着时同步刷新两栏
+  if (getComputedStyle($("#tag-modal")).display !== "none") renderTagModalLists();
+}
+function renderTags() {
+  const box = $("#tag-chips");
+  if (!tagList.length) { box.innerHTML = '<span class="muted" style="font-size:12px">还没有标签，新建一个（如「音乐胶囊」），或在下方曲库列表勾选歌曲直接打标签</span>'; return; }
+  box.innerHTML = tagList.map(t => `
+    <span class="tag-chip">
+      <span data-act="tag-open" data-name="${esc(t.name)}" style="cursor:pointer">${esc(t.name)}</span>
+      <span class="num">${t.count}</span>
+      <button data-act="tag-open" data-name="${esc(t.name)}" title="管理标签内歌曲">管理</button>
+      <button class="del" data-act="tag-del" data-name="${esc(t.name)}" title="删除标签">✕</button>
+    </span>`).join("");
+}
+$("#tag-new-btn").onclick = createTag;
+$("#tag-new-name").addEventListener("keydown", e => { if (e.key === "Enter") createTag(); });
+async function createTag() {
+  const input = $("#tag-new-name");
+  const name = input.value.trim();
+  if (!name) return toast("请填写标签名", true);
+  try {
+    await jpost("/tags", { name });
+    input.value = "";
+    toast("标签已创建");
+    await loadTags();
+    openTag(name);
+  } catch (e) { toast(e.message, true); }
+}
+$("#tag-chips").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act], span[data-act]");
+  if (!btn) return;
+  const name = btn.dataset.name;
+  if (btn.dataset.act === "tag-open") openTag(name);
+  else if (btn.dataset.act === "tag-del") {
+    const t = tagList.find(x => x.name === name);
+    if (!confirm(`确定删除标签「${name}」？${t && t.count ? `标签内 ${t.count} 首歌会变为无标签（歌曲不会删除）` : ""}`)) return;
+    try { await jpost("/tags/delete", { name }); toast("标签已删除"); if (currentTag === name) closeTag(); await loadTags(); loadLibrary(); }
+    catch (err) { toast(err.message, true); }
+  }
+});
+
+/* 标签详情弹窗：左=标签内（移出），右=曲库其他歌曲（加入） */
+let currentTag = "";
+function tagRowHtml(t, action) {
+  const otherTag = action === "add" && t.tag ? `<span class="cur">原属：${esc(t.tag)}</span>` : "";
+  return `<div class="tm-row">
+    ${t.cover_url ? `<img src="${esc(t.cover_url)}" loading="lazy" referrerpolicy="no-referrer">` : '<img alt="">'}
+    <div class="info"><div class="nm">${esc(t.title)}</div><div class="ar">${esc(t.artist)}${t.album ? " · " + esc(t.album) : ""}</div></div>
+    ${otherTag}
+    <button class="btn small ${action === "add" ? "primary" : ""}" data-act="tm-${action}" data-id="${t.id}">${action === "add" ? "加入" : "移出"}</button>
+  </div>`;
+}
+function renderTagModalLists() {
+  const kw = $("#tm-filter").value.trim().toLowerCase();
+  const inList = libList.filter(t => t.tag === currentTag);
+  const outAll = libList.filter(t => t.tag !== currentTag);
+  const outList = kw ? outAll.filter(t => (t.title + " " + t.artist + " " + (t.album || "")).toLowerCase().includes(kw)) : outAll;
+  $("#tm-in-title").textContent = `标签内歌曲（${inList.length}）`;
+  $("#tm-in-list").innerHTML = inList.length ? inList.map(t => tagRowHtml(t, "remove")).join("")
+    : '<div class="empty" style="padding:20px 0">标签还是空的，从右侧添加</div>';
+  $("#tm-out-list").innerHTML = outList.length ? outList.map(t => tagRowHtml(t, "add")).join("")
+    : '<div class="empty" style="padding:20px 0">没有可添加的歌曲</div>';
+}
+function openTag(name) {
+  currentTag = name;
+  $("#tm-name").textContent = name;
+  $("#tm-url").textContent = `${location.origin}/playlist.json?tag=${encodeURIComponent(name)}`;
+  $("#tm-filter").value = "";
+  // 确保曲库数据最新，再渲染两栏
+  loadLibrary().then(renderTagModalLists);
+  $("#tag-modal").style.display = "flex";
+}
+function closeTag() { currentTag = ""; $("#tag-modal").style.display = "none"; }
+$("#tm-close").onclick = closeTag;
+$("#tag-modal").addEventListener("click", e => { if (e.target.id === "tag-modal") closeTag(); });
+$("#tm-filter").addEventListener("input", renderTagModalLists);
+$("#tm-copy").onclick = async () => {
+  const url = $("#tm-url").textContent;
+  try { await navigator.clipboard.writeText(url); toast("歌单地址已复制"); } catch { prompt("复制歌单地址：", url); }
+};
+$("#tm-rename").onclick = async () => {
+  const name = prompt("重命名标签：", currentTag);
+  if (name === null) return;
+  const next = name.trim();
+  if (!next || next === currentTag) return;
+  try {
+    await jpost("/tags/rename", { old: currentTag, name: next });
+    toast("已重命名");
+    await loadTags();
+    await loadLibrary();
+    openTag(next);
+  } catch (e) { toast(e.message, true); }
+};
+$("#tm-delete").onclick = async () => {
+  const t = tagList.find(x => x.name === currentTag);
+  if (!confirm(`确定删除标签「${currentTag}」？${t && t.count ? `标签内 ${t.count} 首歌会变为无标签（歌曲不会删除）` : ""}`)) return;
+  try {
+    await jpost("/tags/delete", { name: currentTag });
+    toast("标签已删除");
+    closeTag();
+    await loadTags();
+    loadLibrary();
+  } catch (e) { toast(e.message, true); }
+};
+$("#tm-in-list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act=tm-remove]");
+  if (!btn) return;
+  try {
+    await jpost("/tags/unassign", { name: currentTag, ids: [Number(btn.dataset.id)] });
+    const t = libList.find(x => x.id === Number(btn.dataset.id));
+    if (t) t.tag = "";
+    renderTagModalLists();
+    loadTags();
+  } catch (err) { toast(err.message, true); }
+});
+$("#tm-out-list").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act=tm-add]");
+  if (!btn) return;
+  try {
+    await jpost("/tags/assign", { name: currentTag, ids: [Number(btn.dataset.id)] });
+    const t = libList.find(x => x.id === Number(btn.dataset.id));
+    if (t) t.tag = currentTag;
+    renderTagModalLists();
+    loadTags();
+  } catch (err) { toast(err.message, true); }
+});
+
 /* ---------- 曲库列表 ---------- */
 let libList = [];
 async function loadLibrary() {
@@ -520,6 +720,7 @@ async function loadLibrary() {
     libList = d.list;
     $("#lib-total").textContent = `共 ${d.total} 首`;
     renderLibrary();
+    loadTags();
   } catch (e) { $("#lib-body").innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`; }
 }
 function renderLibrary() {

@@ -281,8 +281,106 @@ app.post("/library/tag", async c => {
   const tag = String(body?.tag ?? "").trim().slice(0, 30);
   if (!ids.length) return fail(c, "请先勾选曲目", 400);
   const stmts = ids.map((id: number) => c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE id = ?").bind(tag, id));
+  if (tag) stmts.push(c.env.DB.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)").bind(tag));
   await c.env.DB.batch(stmts);
   return ok(c, { count: ids.length, tag }, tag ? `已给 ${ids.length} 首打上「${tag}」标签` : `已清除 ${ids.length} 首的标签`);
+});
+
+/* ---------- 标签（歌单）管理 ---------- */
+
+function normTagName(v: unknown): string {
+  return String(v ?? "").trim().slice(0, 30);
+}
+
+/** 标签列表：GET /tags → [{ name, count }]（含空标签，count 为标签内曲目数） */
+app.get("/tags", async c => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT t.name AS name, COUNT(tr.id) AS count
+     FROM tags t
+     LEFT JOIN tracks tr ON tr.tag = t.name
+     GROUP BY t.name
+     ORDER BY t.created_at DESC`
+  ).all<{ name: string; count: number }>();
+  return ok(c, { list: (results || []).map(r => ({ name: r.name, count: r.count })) });
+});
+
+/** 新建标签：POST /tags { name }（允许空标签，稍后往里加歌） */
+app.post("/tags", async c => {
+  const body = await c.req.json().catch(() => null);
+  const name = normTagName(body?.name);
+  if (!name) return fail(c, "请填写标签名", 400);
+  const dup = await c.env.DB.prepare("SELECT name FROM tags WHERE name = ?").bind(name).first();
+  if (dup) return fail(c, "标签已存在", 409);
+  await c.env.DB.prepare("INSERT INTO tags (name) VALUES (?)").bind(name).run();
+  return ok(c, { name }, "标签已创建");
+});
+
+/** 重命名标签：POST /tags/rename { old, name }（标签表 + 曲目 tag 一起改） */
+app.post("/tags/rename", async c => {
+  const body = await c.req.json().catch(() => null);
+  const oldName = normTagName(body?.old);
+  const newName = normTagName(body?.name);
+  if (!oldName || !newName) return fail(c, "参数错误", 400);
+  const exists = await c.env.DB.prepare("SELECT name FROM tags WHERE name = ?").bind(oldName).first();
+  if (!exists) return fail(c, "标签不存在", 404);
+  if (oldName === newName) return ok(c, { name: newName });
+  const dup = await c.env.DB.prepare("SELECT name FROM tags WHERE name = ?").bind(newName).first();
+  if (dup) return fail(c, "目标标签名已存在", 409);
+  await c.env.DB.batch([
+    c.env.DB.prepare("INSERT INTO tags (name) VALUES (?)").bind(newName),
+    c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE tag = ?").bind(newName, oldName),
+    c.env.DB.prepare("DELETE FROM tags WHERE name = ?").bind(oldName),
+  ]);
+  return ok(c, { name: newName }, "已重命名");
+});
+
+/** 删除标签：POST /tags/delete { name }（标签删除，其下曲目变为无标签，不删歌） */
+app.post("/tags/delete", async c => {
+  const body = await c.req.json().catch(() => null);
+  const name = normTagName(body?.name);
+  if (!name) return fail(c, "参数错误", 400);
+  const r = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM tracks WHERE tag = ?"
+  ).bind(name).first<{ n: number }>();
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE tracks SET tag = '' WHERE tag = ?").bind(name),
+    c.env.DB.prepare("DELETE FROM tags WHERE name = ?").bind(name),
+  ]);
+  return ok(c, { name, freed: r?.n || 0 }, "标签已删除");
+});
+
+/** 加入标签：POST /tags/assign { name, ids:[1,2] }
+ *  单标签语义：歌曲会从原标签移动到该标签 */
+app.post("/tags/assign", async c => {
+  const body = await c.req.json().catch(() => null);
+  const name = normTagName(body?.name);
+  const ids = (Array.isArray(body?.ids) ? body.ids : [])
+    .map((v: unknown) => Number(v))
+    .filter((n: number) => Number.isInteger(n) && n > 0)
+    .slice(0, 500);
+  if (!name) return fail(c, "参数错误", 400);
+  if (!ids.length) return fail(c, "请选择歌曲", 400);
+  const tagExists = await c.env.DB.prepare("SELECT name FROM tags WHERE name = ?").bind(name).first();
+  if (!tagExists) return fail(c, "标签不存在", 404);
+  const stmts = ids.map((id: number) => c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE id = ?").bind(name, id));
+  await c.env.DB.batch(stmts);
+  return ok(c, { name, count: ids.length }, `已添加 ${ids.length} 首到「${name}」`);
+});
+
+/** 移出标签：POST /tags/unassign { name, ids:[1,2] }（仅当歌曲当前属于该标签时清空） */
+app.post("/tags/unassign", async c => {
+  const body = await c.req.json().catch(() => null);
+  const name = normTagName(body?.name);
+  const ids = (Array.isArray(body?.ids) ? body.ids : [])
+    .map((v: unknown) => Number(v))
+    .filter((n: number) => Number.isInteger(n) && n > 0)
+    .slice(0, 500);
+  if (!name || !ids.length) return fail(c, "参数错误", 400);
+  const stmts = ids.map((id: number) =>
+    c.env.DB.prepare("UPDATE tracks SET tag = '' WHERE id = ? AND tag = ?").bind(id, name)
+  );
+  await c.env.DB.batch(stmts);
+  return ok(c, { name, count: ids.length }, `已从「${name}」移出 ${ids.length} 首`);
 });
 
 /** 补全封面/歌词：POST /library/fill { id } —— 已有的项不覆盖 */

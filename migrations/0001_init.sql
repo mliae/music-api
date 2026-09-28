@@ -42,3 +42,9 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
 );
+
+-- 歌单标签（允许空标签先建后加歌；tracks.tag 与之对应，单标签=一个歌单）
+CREATE TABLE IF NOT EXISTS tags (
+  name       TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);

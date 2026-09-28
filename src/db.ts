@@ -1,7 +1,8 @@
 /** D1 schema 幂等初始化 + 通用小工具（与博客同款模式） */
 
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS tracks (
+// 注意：D1 binding 的 exec() 对多语句解析不稳定，逐条 prepare 执行
+const SCHEMA_STMTS = [
+  `CREATE TABLE IF NOT EXISTS tracks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   title      TEXT NOT NULL DEFAULT '',
   artist     TEXT NOT NULL DEFAULT '',
@@ -16,11 +17,11 @@ CREATE TABLE IF NOT EXISTS tracks (
   enabled    INTEGER NOT NULL DEFAULT 1,
   tag        TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-CREATE INDEX IF NOT EXISTS idx_tracks_enabled ON tracks (enabled, id);
-CREATE INDEX IF NOT EXISTS idx_tracks_tag ON tracks (tag);
-CREATE INDEX IF NOT EXISTS idx_tracks_source ON tracks (source, source_id);
-CREATE TABLE IF NOT EXISTS api_keys (
+)`,
+  "CREATE INDEX IF NOT EXISTS idx_tracks_enabled ON tracks (enabled, id)",
+  "CREATE INDEX IF NOT EXISTS idx_tracks_tag ON tracks (tag)",
+  "CREATE INDEX IF NOT EXISTS idx_tracks_source ON tracks (source, source_id)",
+  `CREATE TABLE IF NOT EXISTS api_keys (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT NOT NULL DEFAULT '',
   api_key    TEXT NOT NULL UNIQUE,
@@ -28,29 +29,33 @@ CREATE TABLE IF NOT EXISTS api_keys (
   calls      INTEGER NOT NULL DEFAULT 0,
   last_used  TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-CREATE TABLE IF NOT EXISTS admin_auth (
+)`,
+  `CREATE TABLE IF NOT EXISTS admin_auth (
   id            INTEGER PRIMARY KEY CHECK (id = 1),
   password_hash TEXT NOT NULL DEFAULT '',
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-CREATE TABLE IF NOT EXISTS settings (
+)`,
+  `CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL DEFAULT ''
-);
-`;
+)`,
+  `CREATE TABLE IF NOT EXISTS tags (
+  name       TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+)`,
+];
 
 let schemaPromise: Promise<void> | null = null;
 
-/** 首次请求时检测并建表（与 wrangler d1 migrations apply 幂等共存） */
+/** 首次请求时幂等建表/补表（每个 isolate 只跑一次） */
 export function ensureSchema(db: D1Database): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
-      const row = await db
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tracks'")
-        .first<{ name: string }>();
-      if (row?.name) return;
-      await db.exec(SCHEMA_SQL);
+      for (const sql of SCHEMA_STMTS) await db.prepare(sql).run();
+      // 老库升级：把 tracks 中已有的标签同步进 tags 表（INSERT OR IGNORE 幂等）
+      await db
+        .prepare("INSERT OR IGNORE INTO tags (name) SELECT DISTINCT tag FROM tracks WHERE tag <> ''")
+        .run();
     })().catch(err => {
       schemaPromise = null;
       throw err;
