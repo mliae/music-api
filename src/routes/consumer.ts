@@ -236,11 +236,10 @@ interface TrackRow {
   lyric: string;
   duration: number;
   enabled: number;
-  tag: string;
   created_at: string;
 }
 
-function trackJson(r: TrackRow, r2Domain: string, origin: string) {
+function trackJson(r: TrackRow, tags: string[], r2Domain: string, origin: string) {
   return {
     id: r.id,
     title: r.title,
@@ -251,7 +250,8 @@ function trackJson(r: TrackRow, r2Domain: string, origin: string) {
     vip: !!r.vip,
     duration: r.duration,
     enabled: !!r.enabled,
-    tag: r.tag,
+    tags,
+    tag: tags[0] || "", // 兼容只认单标签字段的旧消费方
     has_cover: !!r.cover_key,
     has_lyric: r.lyric.length > 0,
     created_at: r.created_at,
@@ -265,13 +265,24 @@ app.get("/library", async c => {
   const origin = new URL(c.req.url).origin;
   const r2Domain = await getSetting(c.env.DB, "r2_domain");
   const { results } = await c.env.DB.prepare(
-    "SELECT id, title, artist, album, source, source_id, vip, audio_key, cover_key, lyric, duration, enabled, tag, created_at FROM tracks ORDER BY id DESC LIMIT 1000"
+    "SELECT id, title, artist, album, source, source_id, vip, audio_key, cover_key, lyric, duration, enabled, created_at FROM tracks ORDER BY id DESC LIMIT 1000"
   ).all<TrackRow>();
-  const list = (results || []).map(r => trackJson(r, r2Domain, origin));
+  // 一次查出全部标签关联，在内存分组（曲库量级 ≤1000）
+  const { results: tagRows } = await c.env.DB.prepare(
+    "SELECT track_id, tag FROM track_tags ORDER BY rowid"
+  ).all<{ track_id: number; tag: string }>();
+  const tagMap = new Map<number, string[]>();
+  for (const t of tagRows || []) {
+    const arr = tagMap.get(t.track_id);
+    if (arr) arr.push(t.tag);
+    else tagMap.set(t.track_id, [t.tag]);
+  }
+  const list = (results || []).map(r => trackJson(r, tagMap.get(r.id) || [], r2Domain, origin));
   return ok(c, { list, total: list.length });
 });
 
-/** 批量设置标签：POST /library/tag { ids: [1,2], tag: "最爱" }（tag 为空即清除） */
+/** 批量标签：POST /library/tag { ids:[1,2], tag:"最爱" }
+ *  tag 非空 = 把勾选曲目追加到该标签（不影响其他标签）；为空 = 清除勾选曲目的全部标签 */
 app.post("/library/tag", async c => {
   const body = await c.req.json().catch(() => null);
   const ids = (Array.isArray(body?.ids) ? body.ids : [])
@@ -280,10 +291,20 @@ app.post("/library/tag", async c => {
     .slice(0, 200);
   const tag = String(body?.tag ?? "").trim().slice(0, 30);
   if (!ids.length) return fail(c, "请先勾选曲目", 400);
-  const stmts = ids.map((id: number) => c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE id = ?").bind(tag, id));
-  if (tag) stmts.push(c.env.DB.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)").bind(tag));
-  await c.env.DB.batch(stmts);
-  return ok(c, { count: ids.length, tag }, tag ? `已给 ${ids.length} 首打上「${tag}」标签` : `已清除 ${ids.length} 首的标签`);
+  if (tag) {
+    const stmts = [
+      c.env.DB.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)").bind(tag),
+      ...ids.map((id: number) =>
+        c.env.DB.prepare("INSERT OR IGNORE INTO track_tags (track_id, tag) VALUES (?, ?)").bind(id, tag)
+      ),
+    ];
+    await c.env.DB.batch(stmts);
+    return ok(c, { count: ids.length, tag }, `已把 ${ids.length} 首加入「${tag}」`);
+  }
+  await c.env.DB.batch(
+    ids.map((id: number) => c.env.DB.prepare("DELETE FROM track_tags WHERE track_id = ?").bind(id))
+  );
+  return ok(c, { count: ids.length }, `已清除 ${ids.length} 首的全部标签`);
 });
 
 /* ---------- 标签（歌单）管理 ---------- */
@@ -292,12 +313,12 @@ function normTagName(v: unknown): string {
   return String(v ?? "").trim().slice(0, 30);
 }
 
-/** 标签列表：GET /tags → [{ name, count }]（含空标签，count 为标签内曲目数） */
+/** 标签列表：GET /tags → [{ name, count }]（count 为标签内曲目数，来自多对多关联） */
 app.get("/tags", async c => {
   const { results } = await c.env.DB.prepare(
-    `SELECT t.name AS name, COUNT(tr.id) AS count
+    `SELECT t.name AS name, COUNT(tt.track_id) AS count
      FROM tags t
-     LEFT JOIN tracks tr ON tr.tag = t.name
+     LEFT JOIN track_tags tt ON tt.tag = t.name
      GROUP BY t.name
      ORDER BY t.created_at DESC`
   ).all<{ name: string; count: number }>();
@@ -315,7 +336,7 @@ app.post("/tags", async c => {
   return ok(c, { name }, "标签已创建");
 });
 
-/** 重命名标签：POST /tags/rename { old, name }（标签表 + 曲目 tag 一起改） */
+/** 重命名标签：POST /tags/rename { old, name }（标签表 + track_tags 关联一起改） */
 app.post("/tags/rename", async c => {
   const body = await c.req.json().catch(() => null);
   const oldName = normTagName(body?.old);
@@ -328,29 +349,30 @@ app.post("/tags/rename", async c => {
   if (dup) return fail(c, "目标标签名已存在", 409);
   await c.env.DB.batch([
     c.env.DB.prepare("INSERT INTO tags (name) VALUES (?)").bind(newName),
-    c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE tag = ?").bind(newName, oldName),
+    c.env.DB.prepare("UPDATE OR IGNORE track_tags SET tag = ? WHERE tag = ?").bind(newName, oldName),
+    c.env.DB.prepare("DELETE FROM track_tags WHERE tag = ?").bind(oldName),
     c.env.DB.prepare("DELETE FROM tags WHERE name = ?").bind(oldName),
   ]);
   return ok(c, { name: newName }, "已重命名");
 });
 
-/** 删除标签：POST /tags/delete { name }（标签删除，其下曲目变为无标签，不删歌） */
+/** 删除标签：POST /tags/delete { name }（只删标签和关联，不删歌） */
 app.post("/tags/delete", async c => {
   const body = await c.req.json().catch(() => null);
   const name = normTagName(body?.name);
   if (!name) return fail(c, "参数错误", 400);
   const r = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM tracks WHERE tag = ?"
+    "SELECT COUNT(*) AS n FROM track_tags WHERE tag = ?"
   ).bind(name).first<{ n: number }>();
   await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE tracks SET tag = '' WHERE tag = ?").bind(name),
+    c.env.DB.prepare("DELETE FROM track_tags WHERE tag = ?").bind(name),
     c.env.DB.prepare("DELETE FROM tags WHERE name = ?").bind(name),
   ]);
   return ok(c, { name, freed: r?.n || 0 }, "标签已删除");
 });
 
 /** 加入标签：POST /tags/assign { name, ids:[1,2] }
- *  单标签语义：歌曲会从原标签移动到该标签 */
+ *  多对多：仅追加关联，歌曲的其他标签不受影响 */
 app.post("/tags/assign", async c => {
   const body = await c.req.json().catch(() => null);
   const name = normTagName(body?.name);
@@ -362,12 +384,14 @@ app.post("/tags/assign", async c => {
   if (!ids.length) return fail(c, "请选择歌曲", 400);
   const tagExists = await c.env.DB.prepare("SELECT name FROM tags WHERE name = ?").bind(name).first();
   if (!tagExists) return fail(c, "标签不存在", 404);
-  const stmts = ids.map((id: number) => c.env.DB.prepare("UPDATE tracks SET tag = ? WHERE id = ?").bind(name, id));
+  const stmts = ids.map((id: number) =>
+    c.env.DB.prepare("INSERT OR IGNORE INTO track_tags (track_id, tag) VALUES (?, ?)").bind(id, name)
+  );
   await c.env.DB.batch(stmts);
   return ok(c, { name, count: ids.length }, `已添加 ${ids.length} 首到「${name}」`);
 });
 
-/** 移出标签：POST /tags/unassign { name, ids:[1,2] }（仅当歌曲当前属于该标签时清空） */
+/** 移出标签：POST /tags/unassign { name, ids:[1,2] }（只断开与该标签的关联，其他标签保留） */
 app.post("/tags/unassign", async c => {
   const body = await c.req.json().catch(() => null);
   const name = normTagName(body?.name);
@@ -377,7 +401,7 @@ app.post("/tags/unassign", async c => {
     .slice(0, 500);
   if (!name || !ids.length) return fail(c, "参数错误", 400);
   const stmts = ids.map((id: number) =>
-    c.env.DB.prepare("UPDATE tracks SET tag = '' WHERE id = ? AND tag = ?").bind(id, name)
+    c.env.DB.prepare("DELETE FROM track_tags WHERE track_id = ? AND tag = ?").bind(id, name)
   );
   await c.env.DB.batch(stmts);
   return ok(c, { name, count: ids.length }, `已从「${name}」移出 ${ids.length} 首`);
@@ -462,7 +486,10 @@ app.post("/library/delete", async c => {
   for (const key of [row.audio_key, row.cover_key]) {
     if (key) await c.env.R2.delete(key);
   }
-  await c.env.DB.prepare("DELETE FROM tracks WHERE id = ?").bind(id).run();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM track_tags WHERE track_id = ?").bind(id),
+    c.env.DB.prepare("DELETE FROM tracks WHERE id = ?").bind(id),
+  ]);
   return ok(c, { id }, "已删除");
 });
 

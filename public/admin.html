@@ -226,8 +226,8 @@
       <h2>曲库列表 <span class="hint" id="lib-total"></span></h2>
       <div class="row" style="margin-bottom:12px">
         <input type="text" id="tag-input" placeholder="标签名（如：音乐胶囊）" style="max-width:200px">
-        <button class="btn small" id="tag-apply">给勾选打标签</button>
-        <button class="btn small" id="tag-clear">清除勾选标签</button>
+        <button class="btn small" id="tag-apply">把勾选加入标签</button>
+        <button class="btn small" id="tag-clear">清除勾选的全部标签</button>
         <span class="muted" style="font-size:12px">歌单地址：<span class="mono" id="playlist-url"></span>（?tag=标签 可分组）</span>
         <button class="btn small" id="lib-reload">刷新</button>
       </div>
@@ -328,7 +328,7 @@
       <button class="btn small danger" id="tm-delete">删除标签</button>
     </div>
     <div class="tm-url">歌单地址：<span class="mono" id="tm-url"></span> <button class="btn small" id="tm-copy">复制</button></div>
-    <div class="tm-tip">每首歌同时只能属于一个标签；把歌曲添加到本标签时，会自动从原标签移出。删除标签不会删除歌曲。</div>
+    <div class="tm-tip">一首歌可以同时属于多个标签（歌单）。右侧「加入」只追加关联，不会把歌从其他标签移走；左侧「移出」只断开与本标签的关联。删除标签不会删除歌曲。</div>
     <div class="tm-grid">
       <div class="tm-col">
         <h4 id="tm-in-title">标签内歌曲</h4>
@@ -620,7 +620,7 @@ $("#tag-chips").addEventListener("click", async e => {
   if (btn.dataset.act === "tag-open") openTag(name);
   else if (btn.dataset.act === "tag-del") {
     const t = tagList.find(x => x.name === name);
-    if (!confirm(`确定删除标签「${name}」？${t && t.count ? `标签内 ${t.count} 首歌会变为无标签（歌曲不会删除）` : ""}`)) return;
+    if (!confirm(`确定删除标签「${name}」？${t && t.count ? `将移除该标签与 ${t.count} 首歌的关联（歌曲本身和歌曲的其他标签不受影响）` : ""}`)) return;
     try { await jpost("/tags/delete", { name }); toast("标签已删除"); if (currentTag === name) closeTag(); await loadTags(); loadLibrary(); }
     catch (err) { toast(err.message, true); }
   }
@@ -629,7 +629,8 @@ $("#tag-chips").addEventListener("click", async e => {
 /* 标签详情弹窗：左=标签内（移出），右=曲库其他歌曲（加入） */
 let currentTag = "";
 function tagRowHtml(t, action) {
-  const otherTag = action === "add" && t.tag ? `<span class="cur">原属：${esc(t.tag)}</span>` : "";
+  const others = action === "add" ? (t.tags || []).filter(x => x !== currentTag) : [];
+  const otherTag = others.length ? `<span class="cur">已在：${esc(others.join("、"))}</span>` : "";
   return `<div class="tm-row">
     ${t.cover_url ? `<img src="${esc(t.cover_url)}" loading="lazy" referrerpolicy="no-referrer">` : '<img alt="">'}
     <div class="info"><div class="nm">${esc(t.title)}</div><div class="ar">${esc(t.artist)}${t.album ? " · " + esc(t.album) : ""}</div></div>
@@ -639,8 +640,9 @@ function tagRowHtml(t, action) {
 }
 function renderTagModalLists() {
   const kw = $("#tm-filter").value.trim().toLowerCase();
-  const inList = libList.filter(t => t.tag === currentTag);
-  const outAll = libList.filter(t => t.tag !== currentTag);
+  const hasTag = t => (t.tags || []).includes(currentTag);
+  const inList = libList.filter(hasTag);
+  const outAll = libList.filter(t => !hasTag(t));
   const outList = kw ? outAll.filter(t => (t.title + " " + t.artist + " " + (t.album || "")).toLowerCase().includes(kw)) : outAll;
   $("#tm-in-title").textContent = `标签内歌曲（${inList.length}）`;
   $("#tm-in-list").innerHTML = inList.length ? inList.map(t => tagRowHtml(t, "remove")).join("")
@@ -680,7 +682,7 @@ $("#tm-rename").onclick = async () => {
 };
 $("#tm-delete").onclick = async () => {
   const t = tagList.find(x => x.name === currentTag);
-  if (!confirm(`确定删除标签「${currentTag}」？${t && t.count ? `标签内 ${t.count} 首歌会变为无标签（歌曲不会删除）` : ""}`)) return;
+  if (!confirm(`确定删除标签「${currentTag}」？${t && t.count ? `将移除该标签与 ${t.count} 首歌的关联（歌曲本身和歌曲的其他标签不受影响）` : ""}`)) return;
   try {
     await jpost("/tags/delete", { name: currentTag });
     toast("标签已删除");
@@ -695,7 +697,7 @@ $("#tm-in-list").addEventListener("click", async e => {
   try {
     await jpost("/tags/unassign", { name: currentTag, ids: [Number(btn.dataset.id)] });
     const t = libList.find(x => x.id === Number(btn.dataset.id));
-    if (t) t.tag = "";
+    if (t) t.tags = (t.tags || []).filter(x => x !== currentTag);
     renderTagModalLists();
     loadTags();
   } catch (err) { toast(err.message, true); }
@@ -706,7 +708,7 @@ $("#tm-out-list").addEventListener("click", async e => {
   try {
     await jpost("/tags/assign", { name: currentTag, ids: [Number(btn.dataset.id)] });
     const t = libList.find(x => x.id === Number(btn.dataset.id));
-    if (t) t.tag = currentTag;
+    if (t) t.tags = [...(t.tags || []), currentTag];
     renderTagModalLists();
     loadTags();
   } catch (err) { toast(err.message, true); }
@@ -733,7 +735,7 @@ function renderLibrary() {
     <td class="title-cell"><div>${esc(t.title)}${t.vip ? '<span class="badge vip">VIP</span>' : ""}</div>
       <div class="muted" style="font-size:12px">${esc(t.artist)}${t.album ? " · " + esc(t.album) : ""}</div></td>
     <td><span class="badge ${esc(t.source)}">${esc(t.source_label)}</span></td>
-    <td>${t.tag ? `<span class="badge tag">${esc(t.tag)}</span>` : '<span class="muted">—</span>'}</td>
+    <td>${(t.tags && t.tags.length) ? t.tags.map(x => `<span class="badge tag">${esc(x)}</span>`).join(" ") : '<span class="muted">—</span>'}</td>
     <td><span class="badge ${t.enabled ? "on" : "off"}">${t.enabled ? "启用" : "停用"}</span></td>
     <td>${t.audio_url ? `<audio class="preview" src="${esc(t.audio_url)}" controls preload="none"></audio>` : '<span class="muted">无音频</span>'}</td>
     <td>

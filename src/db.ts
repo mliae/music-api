@@ -43,6 +43,15 @@ const SCHEMA_STMTS = [
   name       TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 )`,
+  // 曲目-标签 多对多：一首歌可同时属于多个标签（歌单）
+  `CREATE TABLE IF NOT EXISTS track_tags (
+  track_id   INTEGER NOT NULL,
+  tag        TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (track_id, tag)
+)`,
+  "CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags (tag)",
+  "CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags (track_id)",
 ];
 
 let schemaPromise: Promise<void> | null = null;
@@ -52,7 +61,10 @@ export function ensureSchema(db: D1Database): Promise<void> {
   if (!schemaPromise) {
     schemaPromise = (async () => {
       for (const sql of SCHEMA_STMTS) await db.prepare(sql).run();
-      // 老库升级：把 tracks 中已有的标签同步进 tags 表（INSERT OR IGNORE 幂等）
+      // 老库升级：tracks 中已有的单标签迁入关联表；补齐 tags 表（均幂等）
+      await db
+        .prepare("INSERT OR IGNORE INTO track_tags (track_id, tag) SELECT id, tag FROM tracks WHERE tag <> ''")
+        .run();
       await db
         .prepare("INSERT OR IGNORE INTO tags (name) SELECT DISTINCT tag FROM tracks WHERE tag <> ''")
         .run();

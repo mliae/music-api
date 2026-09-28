@@ -41,7 +41,11 @@ app.get("/playlist.json", async c => {
   const tag = (c.req.query("tag") || "").trim().slice(0, 30);
   const { results } = tag
     ? await c.env.DB.prepare(
-        "SELECT id, title, artist, audio_key, cover_key, lyric FROM tracks WHERE enabled = 1 AND tag = ? ORDER BY id DESC LIMIT 500"
+        `SELECT tr.id AS id, tr.title AS title, tr.artist AS artist, tr.audio_key AS audio_key, tr.cover_key AS cover_key, tr.lyric AS lyric
+         FROM track_tags tt
+         JOIN tracks tr ON tr.id = tt.track_id
+         WHERE tt.tag = ? AND tr.enabled = 1
+         ORDER BY tr.id DESC LIMIT 500`
       )
         .bind(tag)
         .all<{ id: number; title: string; artist: string; audio_key: string; cover_key: string; lyric: string }>()

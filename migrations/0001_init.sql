@@ -43,8 +43,18 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL DEFAULT ''
 );
 
--- 歌单标签（允许空标签先建后加歌；tracks.tag 与之对应，单标签=一个歌单）
+-- 歌单标签（允许空标签先建后加歌；与曲目多对多，见 track_tags）
 CREATE TABLE IF NOT EXISTS tags (
   name       TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- 曲目-标签 多对多关联：一首歌可同时属于多个标签（歌单）
+CREATE TABLE IF NOT EXISTS track_tags (
+  track_id   INTEGER NOT NULL,
+  tag        TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  PRIMARY KEY (track_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags (tag);
+CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags (track_id);
