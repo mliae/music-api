@@ -68,10 +68,30 @@
   .badge.off { color: var(--muted); }
   .badge.tag { color: var(--blue); border-color: #2b3d5c; }
 
-  /* 搜索结果分平台 */
-  .plat-section { margin-bottom: 14px; }
-  .plat-section h3 { font-size: 13px; color: var(--muted); margin-bottom: 6px; font-weight: normal; }
-  .plat-section h3 b { color: var(--text); }
+  /* 搜索结果分平台折叠 */
+  .search-tools { display: flex; gap: 8px; margin-bottom: 10px; }
+  .plat-group { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  .plat-head { width: 100%; display: flex; align-items: center; gap: 8px; background: var(--panel2); border: none; color: var(--text); padding: 10px 14px; text-align: left; }
+  .plat-head:hover { background: #232834; }
+  .plat-head .cnt { color: var(--muted); font-size: 12px; }
+  .plat-head .chev { margin-left: auto; color: var(--muted); transition: transform .2s; }
+  .plat-group.open .plat-head .chev { transform: rotate(180deg); }
+  .plat-body { display: none; }
+  .plat-group.open .plat-body { display: block; }
+  .plat-group table tr { cursor: pointer; }
+  .plat-group table tr.selected td { background: rgba(236,65,65,.12); }
+
+  /* 歌曲详情卡 */
+  .modal.wide { width: min(720px, 94vw); }
+  .sd-top { display: flex; gap: 18px; }
+  .sd-cover { width: 132px; height: 132px; border-radius: 12px; object-fit: cover; background: var(--panel2); flex: none; }
+  .sd-title { font-size: 19px; line-height: 1.35; margin-bottom: 6px; }
+  .sd-artist { font-size: 14px; margin-bottom: 8px; }
+  .sd-line { color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+  .sd-line b { color: var(--muted); font-weight: normal; margin-right: 6px; }
+  .sd-line .mono { color: var(--text); }
+  audio.sd-audio { width: 100%; margin: 16px 0 12px; }
+  .sd-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
   .subtabs { display: flex; gap: 6px; margin-bottom: 14px; }
   .subtabs button { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 6px 14px; border-radius: 8px; }
@@ -239,6 +259,28 @@
   </div>
 </div>
 
+<!-- 搜索歌曲详情弹窗 -->
+<div class="modal-mask" id="song-modal" style="display:none">
+  <div class="modal wide">
+    <div class="sd-top">
+      <img class="sd-cover" id="sd-cover" alt="">
+      <div style="flex:1;min-width:0">
+        <div class="sd-title" id="sd-title"></div>
+        <div class="sd-artist" id="sd-artist"></div>
+        <div class="sd-line" id="sd-album-line" style="display:none"><b>专辑</b><span id="sd-album"></span></div>
+        <div class="sd-line"><b>时长</b><span id="sd-duration"></span><b style="margin-left:14px">ID</b><span class="mono" id="sd-id"></span></div>
+        <div class="sd-line"><b>来源</b><span id="sd-source"></span> <a class="link" id="sd-page" target="_blank" rel="noopener">在原平台打开 ↗</a></div>
+      </div>
+    </div>
+    <audio class="sd-audio" id="sd-audio" controls preload="none"></audio>
+    <div class="sd-actions">
+      <button class="btn primary" id="sd-ingest">入库到曲库</button>
+      <button class="btn" id="sd-close">关 闭</button>
+      <span class="muted" id="sd-hint" style="font-size:12px;align-self:center"></span>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
@@ -312,6 +354,13 @@ $$("#tab-library .subtabs button").forEach(btn => btn.onclick = () => {
 
 /* ---------- 搜索入库 ---------- */
 const PLAT_LABEL = { netease: "网易云", qq: "QQ 音乐", kugou: "酷狗", kuwo: "酷我", qishui: "汽水音乐" };
+const SOURCE_PAGE = {
+  netease: id => `https://music.163.com/song?id=${id}`,
+  qq: id => `https://y.qq.com/n/ryqq/songDetail/${id}`,
+  kugou: id => `https://www.kugou.com/song/#hash=${id}`,
+  kuwo: id => `https://www.kuwo.cn/play_detail/${id}`,
+  qishui: id => `https://www.qishui.com/song/${id}`,
+};
 let searchData = {};
 $("#search-btn").onclick = doSearch;
 $("#search-kw").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
@@ -325,52 +374,116 @@ async function doSearch() {
     renderSearch();
   } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
-function fmtDur(s) { s = Number(s) || 0; if (!s) return ""; return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function fmtDur(s) { s = Number(s) || 0; if (!s) return "未知"; return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
 function renderSearch() {
   const box = $("#search-results");
-  let html = "";
-  for (const plat of ["netease", "qq", "kugou", "kuwo", "qishui"]) {
-    const list = searchData[plat] || [];
-    if (!list.length) continue;
-    html += `<div class="plat-section"><h3><b>${PLAT_LABEL[plat]}</b> · ${list.length} 条</h3><table><tbody>`;
+  const plats = ["netease", "qq", "kugou", "kuwo", "qishui"].filter(p => (searchData[p] || []).length);
+  if (!plats.length) { box.innerHTML = '<div class="empty">五个平台都没有搜到结果</div>'; return; }
+
+  // 默认只展开第一个有结果的平台；工具条可一键全展开/收起
+  let html = `<div class="search-tools">
+    <button class="btn small" id="plat-expand">全部展开</button>
+    <button class="btn small" id="plat-collapse">全部收起</button>
+    <span class="muted" style="font-size:12px;align-self:center">点击任意歌曲查看详情并试听 / 入库</span>
+  </div>`;
+  plats.forEach((plat, gi) => {
+    const list = searchData[plat];
+    html += `<div class="plat-group${gi === 0 ? " open" : ""}" data-plat="${plat}">
+      <button class="plat-head" data-act="toggle-group" type="button">
+        <span class="badge ${plat}">${PLAT_LABEL[plat]}</span>
+        <span class="cnt">${list.length} 条结果</span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="plat-body"><table><tbody>`;
     list.forEach((s, i) => {
-      html += `<tr>
+      html += `<tr data-act="open-song" data-p="${plat}" data-i="${i}">
         <td style="width:48px">${s.cover ? `<img class="cover-thumb" src="${esc(s.cover)}" loading="lazy" referrerpolicy="no-referrer">` : '<div class="cover-thumb"></div>'}</td>
         <td class="title-cell"><div>${esc(s.title)}${s.vip ? '<span class="badge vip">VIP</span>' : ""}</div><div class="muted" style="font-size:12px">${esc(s.artist)}${s.album ? " · " + esc(s.album) : ""}</div></td>
         <td style="width:56px" class="muted">${fmtDur(s.duration)}</td>
-        <td style="width:60px"><button class="btn small" data-act="preview" data-p="${plat}" data-i="${i}">试听</button></td>
-        <td style="width:70px"><button class="btn small primary" data-act="ingest" data-p="${plat}" data-i="${i}">入库</button></td>
       </tr>`;
     });
-    html += "</tbody></table></div>";
-  }
-  box.innerHTML = html || '<div class="empty">五个平台都没有搜到结果</div>';
+    html += "</tbody></table></div></div>";
+  });
+  box.innerHTML = html;
 }
-let previewAudio = null;
-$("#search-results").addEventListener("click", async e => {
-  const btn = e.target.closest("button[data-act]");
-  if (!btn) return;
-  const s = (searchData[btn.dataset.p] || [])[Number(btn.dataset.i)];
-  if (!s) return;
-  if (btn.dataset.act === "preview") {
-    try {
-      btn.disabled = true; btn.textContent = "…";
-      const d = await api(`/resolve?source=${s.source}&id=${encodeURIComponent(s.songId)}&title=${encodeURIComponent(s.title)}&artist=${encodeURIComponent(s.artist)}`);
-      if (previewAudio) previewAudio.pause();
-      previewAudio = new Audio(d.url);
-      previewAudio.play().catch(() => toast("浏览器拦截了播放，请再点一次", true));
-    } catch (err) { toast(err.message, true); }
-    finally { btn.disabled = false; btn.textContent = "试听"; }
-  } else if (btn.dataset.act === "ingest") {
-    try {
-      btn.disabled = true; btn.textContent = "入库中";
-      const d = await jpost("/ingest", { source: s.source, songId: s.songId, title: s.title, artist: s.artist, album: s.album, cover: s.cover, vip: s.vip, duration: s.duration });
-      toast(d.duplicate ? "已在曲库中" : `入库成功（${d.via || "直链"}）`);
-      btn.textContent = "已入库";
-      loadLibrary();
-    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = "入库"; }
+$("#search-results").addEventListener("click", e => {
+  const tg = e.target.closest("[data-act]");
+  if (!tg) return;
+  if (tg.dataset.act === "toggle-group") {
+    tg.closest(".plat-group").classList.toggle("open");
+    return;
+  }
+  if (tg.dataset.act === "open-song") {
+    const s = (searchData[tg.dataset.p] || [])[Number(tg.dataset.i)];
+    if (s) openSong(s, tg.closest("tr"));
   }
 });
+$("#search-results").addEventListener("click", e => {
+  if (e.target.id === "plat-expand") $$(".plat-group").forEach(g => g.classList.add("open"));
+  if (e.target.id === "plat-collapse") $$(".plat-group").forEach(g => g.classList.remove("open"));
+});
+
+/* ---------- 歌曲详情卡（试听 + 入库） ---------- */
+let currentSong = null;
+let previewUrl = "";
+function openSong(s, rowEl) {
+  currentSong = s;
+  previewUrl = "";
+  $$(".plat-group tr.selected").forEach(tr => tr.classList.remove("selected"));
+  if (rowEl) rowEl.classList.add("selected");
+
+  $("#sd-cover").src = s.cover || "";
+  $("#sd-cover").style.visibility = s.cover ? "visible" : "hidden";
+  $("#sd-title").textContent = s.title;
+  $("#sd-artist").textContent = s.artist || "未知歌手";
+  if (s.album) { $("#sd-album-line").style.display = ""; $("#sd-album").textContent = s.album; }
+  else $("#sd-album-line").style.display = "none";
+  $("#sd-duration").textContent = fmtDur(s.duration);
+  $("#sd-id").textContent = s.songId;
+  $("#sd-source").innerHTML = `<span class="badge ${s.source}">${PLAT_LABEL[s.source] || s.source}</span>${s.vip ? ' <span class="badge vip">VIP</span>' : ""}`;
+  $("#sd-page").href = SOURCE_PAGE[s.source] ? SOURCE_PAGE[s.source](s.songId) : "#";
+  const audio = $("#sd-audio");
+  audio.removeAttribute("src");
+  audio.load();
+  $("#sd-hint").textContent = "正在解析试听地址…";
+  $("#sd-ingest").disabled = false;
+  $("#sd-ingest").textContent = "入库到曲库";
+  $("#song-modal").style.display = "flex";
+
+  api(`/resolve?source=${s.source}&id=${encodeURIComponent(s.songId)}&title=${encodeURIComponent(s.title)}&artist=${encodeURIComponent(s.artist || "")}`)
+    .then(d => {
+      previewUrl = d.url;
+      audio.src = d.url;
+      $("#sd-hint").textContent = "";
+      audio.play().catch(() => {});
+    })
+    .catch(err => { $("#sd-hint").textContent = "试听解析失败：" + err.message; });
+}
+function closeSong() {
+  const audio = $("#sd-audio");
+  audio.pause();
+  $("#song-modal").style.display = "none";
+}
+$("#sd-close").onclick = closeSong;
+$("#song-modal").addEventListener("click", e => { if (e.target.id === "song-modal") closeSong(); });
+$("#sd-ingest").onclick = async () => {
+  const s = currentSong;
+  if (!s) return;
+  const btn = $("#sd-ingest");
+  btn.disabled = true; btn.textContent = "解析入库中…";
+  try {
+    const d = await jpost("/ingest", { source: s.source, songId: s.songId, title: s.title, artist: s.artist, album: s.album, cover: s.cover, vip: s.vip, duration: s.duration });
+    $("#sd-hint").textContent = d.duplicate ? "该歌曲已在曲库中" : `入库成功（音源：${d.via || "直链"}）`;
+    btn.textContent = d.duplicate ? "已在曲库" : "已入库";
+    toast(d.duplicate ? "已在曲库中" : "入库成功");
+    loadLibrary();
+    setTimeout(closeSong, 900);
+  } catch (err) {
+    $("#sd-hint").textContent = "入库失败：" + err.message;
+    toast(err.message, true);
+    btn.disabled = false; btn.textContent = "入库到曲库";
+  }
+};
 
 /* ---------- 本地上传 / 网络地址 ---------- */
 $("#up-btn").onclick = async () => {
