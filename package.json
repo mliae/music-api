@@ -1,0 +1,22 @@
+{
+  "name": "music-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "中央音乐解析服务：网易云/QQ/酷狗/酷我/汽水聚合搜索 + 解析入库 R2 + 多项目 ApiKey 授权（Cloudflare Workers + D1 + R2）",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply music-api-db --local",
+    "db:remote": "wrangler d1 migrations apply music-api-db --remote",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.0.0",
+    "typescript": "^5.0.0",
+    "wrangler": "^4.0.0"
+  }
+}

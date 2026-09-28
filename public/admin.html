@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>music-api 管理后台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e8eaf0; --muted: #9aa3b2; --accent: #ec4141; --accent2: #ff6b6b;
+    --green: #34c98e; --yellow: #f0b429; --blue: #4f9cff;
+  }
+  body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  button { cursor: pointer; font: inherit; }
+  input, select, textarea { font: inherit; background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 8px 10px; outline: none; }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  .btn { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 7px 14px; transition: .15s; }
+  .btn:hover { border-color: var(--accent); color: #fff; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent2); }
+  .btn.small { padding: 3px 10px; font-size: 12px; border-radius: 6px; }
+  .btn.danger:hover { border-color: var(--accent); color: var(--accent2); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* 登录 */
+  #login-view { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .login-card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 36px; width: 360px; }
+  .login-card h1 { font-size: 20px; margin-bottom: 4px; }
+  .login-card .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .login-card input { width: 100%; margin-bottom: 14px; }
+  .login-card .btn { width: 100%; }
+
+  /* 主界面 */
+  #main-view { display: none; max-width: 1180px; margin: 0 auto; padding: 20px; }
+  header.top { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  header.top h1 { font-size: 18px; display: flex; align-items: center; gap: 8px; }
+  header.top .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  nav.tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  nav.tabs button { background: none; border: none; color: var(--muted); padding: 7px 18px; border-radius: 7px; }
+  nav.tabs button.active { background: var(--accent); color: #fff; }
+  header.top .spacer { flex: 1; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 18px; }
+  .panel h2 { font-size: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .hint { font-size: 12px; color: var(--muted); font-weight: normal; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row input[type=text], .row input[type=password], .row input[type=url] { flex: 1; min-width: 180px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-size: 12px; font-weight: normal; }
+  td { font-size: 13px; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  .cover-thumb { width: 38px; height: 38px; border-radius: 6px; object-fit: cover; background: var(--panel2); display: block; }
+  .title-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.netease { color: #ff8080; border-color: #5c2b2b; }
+  .badge.qq { color: #7fd6a4; border-color: #2b4d3a; }
+  .badge.kugou { color: #7fb8ff; border-color: #2b3d5c; }
+  .badge.kuwo { color: #ffd27f; border-color: #5c4a2b; }
+  .badge.qishui { color: #e08fff; border-color: #4d2b5c; }
+  .badge.upload, .badge.url { color: var(--muted); }
+  .badge.vip { color: var(--yellow); border-color: #5c4a2b; margin-left: 4px; }
+  .badge.on { color: var(--green); border-color: #2b5c46; }
+  .badge.off { color: var(--muted); }
+  .badge.tag { color: var(--blue); border-color: #2b3d5c; }
+
+  /* 搜索结果分平台 */
+  .plat-section { margin-bottom: 14px; }
+  .plat-section h3 { font-size: 13px; color: var(--muted); margin-bottom: 6px; font-weight: normal; }
+  .plat-section h3 b { color: var(--text); }
+
+  .subtabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .subtabs button { background: var(--panel2); border: 1px solid var(--line); color: var(--muted); padding: 6px 14px; border-radius: 8px; }
+  .subtabs button.active { color: #fff; border-color: var(--accent); background: rgba(236,65,65,.12); }
+
+  .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 10px 18px; border-radius: 10px; z-index: 100; box-shadow: 0 8px 30px rgba(0,0,0,.4); max-width: 80vw; }
+  .toast.err { border-color: var(--accent); color: var(--accent2); }
+
+  /* 歌词编辑弹窗 */
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; width: min(640px, 92vw); }
+  .modal h3 { font-size: 15px; margin-bottom: 12px; }
+  .modal textarea { width: 100%; height: 260px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .modal .row { justify-content: flex-end; margin-top: 12px; }
+
+  .key-cell { display: flex; align-items: center; gap: 6px; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+  .link { color: var(--blue); cursor: pointer; text-decoration: none; }
+  .link:hover { text-decoration: underline; }
+  audio.preview { width: 180px; height: 28px; }
+</style>
+</head>
+<body>
+
+<!-- 登录视图 -->
+<div id="login-view">
+  <div class="login-card">
+    <h1>music-api 管理后台</h1>
+    <div class="sub" id="login-sub">中央音乐解析服务 · 请输入管理密码</div>
+    <input type="password" id="login-pwd" placeholder="管理密码" autocomplete="current-password">
+    <button class="btn primary" id="login-btn">登 录</button>
+  </div>
+</div>
+
+<!-- 主视图 -->
+<div id="main-view">
+  <header class="top">
+    <h1><span class="dot"></span>music-api</h1>
+    <nav class="tabs">
+      <button data-tab="library" class="active">曲库</button>
+      <button data-tab="keys">授权</button>
+      <button data-tab="settings">设置</button>
+    </nav>
+    <div class="spacer"></div>
+    <button class="btn small" id="logout-btn">退出登录</button>
+  </header>
+
+  <!-- ============ 曲库 Tab ============ -->
+  <section id="tab-library">
+    <div class="panel">
+      <h2>添加入库 <span class="hint">搜索五平台 / 本地上传 / 网络地址转存，音频封面自动存 R2</span></h2>
+      <div class="subtabs">
+        <button data-sub="search" class="active">搜索入库</button>
+        <button data-sub="upload">本地上传</button>
+        <button data-sub="url">网络地址</button>
+      </div>
+
+      <div id="sub-search">
+        <div class="row">
+          <input type="text" id="search-kw" placeholder="歌名 / 歌手 / 专辑关键词">
+          <button class="btn primary" id="search-btn">搜 索</button>
+        </div>
+        <div id="search-results" style="margin-top:14px"></div>
+      </div>
+
+      <div id="sub-upload" style="display:none">
+        <div class="row">
+          <input type="file" id="up-file" accept="audio/*">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" id="up-title" placeholder="歌名（留空取文件名）">
+          <input type="text" id="up-artist" placeholder="歌手（留空为「本地音乐」）">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="file" id="up-cover" accept="image/*">
+          <span class="muted" style="font-size:12px">可选封面图</span>
+          <button class="btn primary" id="up-btn">上传入库</button>
+        </div>
+      </div>
+
+      <div id="sub-url" style="display:none">
+        <div class="row">
+          <input type="url" id="url-src" placeholder="https:// 音频直链">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" id="url-title" placeholder="歌名（留空取文件名）">
+          <input type="text" id="url-artist" placeholder="歌手（留空为「网络音乐」）">
+          <button class="btn primary" id="url-btn">转存入库</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>曲库列表 <span class="hint" id="lib-total"></span></h2>
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="tag-input" placeholder="标签名（如：音乐胶囊）" style="max-width:200px">
+        <button class="btn small" id="tag-apply">给勾选打标签</button>
+        <button class="btn small" id="tag-clear">清除勾选标签</button>
+        <span class="muted" style="font-size:12px">歌单地址：<span class="mono" id="playlist-url"></span>（?tag=标签 可分组）</span>
+        <button class="btn small" id="lib-reload">刷新</button>
+      </div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:30px"><input type="checkbox" id="check-all"></th>
+            <th style="width:44px">ID</th><th style="width:48px"></th><th>歌名 / 歌手</th>
+            <th style="width:70px">来源</th><th style="width:110px">标签</th><th style="width:60px">状态</th>
+            <th style="width:200px">试听</th><th style="width:230px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="lib-body"></tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 授权 Tab ============ -->
+  <section id="tab-keys" style="display:none">
+    <div class="panel">
+      <h2>新建 ApiKey <span class="hint">一个项目一把 Key，随时可停用</span></h2>
+      <div class="row">
+        <input type="text" id="key-name" placeholder="项目备注，如：博客 jxe.me">
+        <button class="btn primary" id="key-create">创建</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>已授权项目 <span class="hint" id="keys-total"></span></h2>
+      <table>
+        <thead><tr><th style="width:44px">ID</th><th>项目</th><th>ApiKey</th><th style="width:70px">状态</th><th style="width:80px">调用量</th><th style="width:160px">最近使用</th><th style="width:130px">操作</th></tr></thead>
+        <tbody id="keys-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 设置 Tab ============ -->
+  <section id="tab-settings" style="display:none">
+    <div class="panel">
+      <h2>R2 自定义域名 <span class="hint">配置后曲目音频/封面走该域名直连；留空走本服务 /media/ 代理</span></h2>
+      <div class="row">
+        <input type="text" id="set-r2" placeholder="https://r2.example.com（留空用 /media/ 代理）">
+        <button class="btn primary" id="set-save">保存</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>修改管理密码 <span class="hint">改后所有设备需重新登录</span></h2>
+      <div class="row">
+        <input type="password" id="pwd-old" placeholder="原密码">
+        <input type="password" id="pwd-new" placeholder="新密码（≥6 位）">
+        <button class="btn primary" id="pwd-save">修改</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- 歌词编辑弹窗 -->
+<div class="modal-mask" id="lyric-modal" style="display:none">
+  <div class="modal">
+    <h3 id="lyric-title">编辑歌词</h3>
+    <textarea id="lyric-text" placeholder="LRC 原文，留空保存即清除"></textarea>
+    <div class="row">
+      <button class="btn" id="lyric-cancel">取消</button>
+      <button class="btn primary" id="lyric-save">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+
+/* ---------- 基础请求 ---------- */
+async function api(path, opts) {
+  const res = await fetch("/admin/api" + path, {
+    credentials: "same-origin",
+    headers: opts && opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : undefined,
+    ...opts,
+  });
+  const data = await res.json().catch(() => ({ code: res.status, message: "响应解析失败", data: null }));
+  if (res.status === 401 && !path.startsWith("/login") && path !== "/status") {
+    showLogin();
+    throw new Error(data.message || "未授权");
+  }
+  if (data.code !== 200) throw new Error(data.message || "请求失败");
+  return data.data;
+}
+const jpost = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+function toast(msg, isErr) {
+  const el = document.createElement("div");
+  el.className = "toast" + (isErr ? " err" : "");
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---------- 登录 ---------- */
+async function boot() {
+  try {
+    const st = await api("/status");
+    if (st.authed) return showMain();
+    $("#login-sub").textContent = st.configured ? "中央音乐解析服务 · 请输入管理密码" : "首次使用 · 请设置初始管理密码（≥6 位）";
+    $("#login-btn").textContent = st.configured ? "登 录" : "设置并进入";
+  } catch { /* 忽略，保持登录页 */ }
+  showLogin();
+}
+function showLogin() { $("#login-view").style.display = "flex"; $("#main-view").style.display = "none"; }
+function showMain() {
+  $("#login-view").style.display = "none";
+  $("#main-view").style.display = "block";
+  loadLibrary(); loadKeys(); loadSettings();
+  $("#playlist-url").textContent = location.origin + "/playlist.json";
+}
+$("#login-btn").onclick = async () => {
+  const pwd = $("#login-pwd").value;
+  if (!pwd) return toast("请输入密码", true);
+  try {
+    await jpost("/login", { password: pwd });
+    $("#login-pwd").value = "";
+    toast("欢迎回来");
+    showMain();
+  } catch (e) { toast(e.message, true); }
+};
+$("#login-pwd").addEventListener("keydown", e => { if (e.key === "Enter") $("#login-btn").click(); });
+$("#logout-btn").onclick = async () => { await jpost("/logout").catch(() => {}); showLogin(); };
+
+/* ---------- Tab 切换 ---------- */
+$$("nav.tabs button").forEach(btn => btn.onclick = () => {
+  $$("nav.tabs button").forEach(b => b.classList.toggle("active", b === btn));
+  ["library", "keys", "settings"].forEach(t => $("#tab-" + t).style.display = t === btn.dataset.tab ? "" : "none");
+});
+$$("#tab-library .subtabs button").forEach(btn => btn.onclick = () => {
+  $$("#tab-library .subtabs button").forEach(b => b.classList.toggle("active", b === btn));
+  ["search", "upload", "url"].forEach(s => $("#sub-" + s).style.display = s === btn.dataset.sub ? "" : "none");
+});
+
+/* ---------- 搜索入库 ---------- */
+const PLAT_LABEL = { netease: "网易云", qq: "QQ 音乐", kugou: "酷狗", kuwo: "酷我", qishui: "汽水音乐" };
+let searchData = {};
+$("#search-btn").onclick = doSearch;
+$("#search-kw").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
+async function doSearch() {
+  const kw = $("#search-kw").value.trim();
+  if (!kw) return toast("请输入关键词", true);
+  const box = $("#search-results");
+  box.innerHTML = '<div class="empty">五平台搜索中…</div>';
+  try {
+    searchData = await api("/search?kw=" + encodeURIComponent(kw));
+    renderSearch();
+  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+function fmtDur(s) { s = Number(s) || 0; if (!s) return ""; return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+function renderSearch() {
+  const box = $("#search-results");
+  let html = "";
+  for (const plat of ["netease", "qq", "kugou", "kuwo", "qishui"]) {
+    const list = searchData[plat] || [];
+    if (!list.length) continue;
+    html += `<div class="plat-section"><h3><b>${PLAT_LABEL[plat]}</b> · ${list.length} 条</h3><table><tbody>`;
+    list.forEach((s, i) => {
+      html += `<tr>
+        <td style="width:48px">${s.cover ? `<img class="cover-thumb" src="${esc(s.cover)}" loading="lazy" referrerpolicy="no-referrer">` : '<div class="cover-thumb"></div>'}</td>
+        <td class="title-cell"><div>${esc(s.title)}${s.vip ? '<span class="badge vip">VIP</span>' : ""}</div><div class="muted" style="font-size:12px">${esc(s.artist)}${s.album ? " · " + esc(s.album) : ""}</div></td>
+        <td style="width:56px" class="muted">${fmtDur(s.duration)}</td>
+        <td style="width:60px"><button class="btn small" data-act="preview" data-p="${plat}" data-i="${i}">试听</button></td>
+        <td style="width:70px"><button class="btn small primary" data-act="ingest" data-p="${plat}" data-i="${i}">入库</button></td>
+      </tr>`;
+    });
+    html += "</tbody></table></div>";
+  }
+  box.innerHTML = html || '<div class="empty">五个平台都没有搜到结果</div>';
+}
+let previewAudio = null;
+$("#search-results").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const s = (searchData[btn.dataset.p] || [])[Number(btn.dataset.i)];
+  if (!s) return;
+  if (btn.dataset.act === "preview") {
+    try {
+      btn.disabled = true; btn.textContent = "…";
+      const d = await api(`/resolve?source=${s.source}&id=${encodeURIComponent(s.songId)}&title=${encodeURIComponent(s.title)}&artist=${encodeURIComponent(s.artist)}`);
+      if (previewAudio) previewAudio.pause();
+      previewAudio = new Audio(d.url);
+      previewAudio.play().catch(() => toast("浏览器拦截了播放，请再点一次", true));
+    } catch (err) { toast(err.message, true); }
+    finally { btn.disabled = false; btn.textContent = "试听"; }
+  } else if (btn.dataset.act === "ingest") {
+    try {
+      btn.disabled = true; btn.textContent = "入库中";
+      const d = await jpost("/ingest", { source: s.source, songId: s.songId, title: s.title, artist: s.artist, album: s.album, cover: s.cover, vip: s.vip, duration: s.duration });
+      toast(d.duplicate ? "已在曲库中" : `入库成功（${d.via || "直链"}）`);
+      btn.textContent = "已入库";
+      loadLibrary();
+    } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = "入库"; }
+  }
+});
+
+/* ---------- 本地上传 / 网络地址 ---------- */
+$("#up-btn").onclick = async () => {
+  const f = $("#up-file").files[0];
+  if (!f) return toast("请选择音频文件", true);
+  const fd = new FormData();
+  fd.append("file", f);
+  if ($("#up-title").value.trim()) fd.append("title", $("#up-title").value.trim());
+  if ($("#up-artist").value.trim()) fd.append("artist", $("#up-artist").value.trim());
+  const cf = $("#up-cover").files[0];
+  if (cf) fd.append("cover", cf);
+  const btn = $("#up-btn");
+  try { btn.disabled = true; btn.textContent = "上传中…"; await api("/ingest/upload", { method: "POST", body: fd }); toast("上传成功"); loadLibrary(); }
+  catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "上传入库"; }
+};
+$("#url-btn").onclick = async () => {
+  const url = $("#url-src").value.trim();
+  if (!url) return toast("请输入音频地址", true);
+  const btn = $("#url-btn");
+  try {
+    btn.disabled = true; btn.textContent = "转存中…";
+    await jpost("/ingest/url", { url, title: $("#url-title").value.trim(), artist: $("#url-artist").value.trim() });
+    toast("转存成功"); loadLibrary();
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = "转存入库"; }
+};
+
+/* ---------- 曲库列表 ---------- */
+let libList = [];
+async function loadLibrary() {
+  try {
+    const d = await api("/library");
+    libList = d.list;
+    $("#lib-total").textContent = `共 ${d.total} 首`;
+    renderLibrary();
+  } catch (e) { $("#lib-body").innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`; }
+}
+function renderLibrary() {
+  const body = $("#lib-body");
+  if (!libList.length) { body.innerHTML = '<tr><td colspan="9" class="empty">曲库为空，先去上面入库几首</td></tr>'; return; }
+  body.innerHTML = libList.map(t => `<tr>
+    <td><input type="checkbox" class="lib-check" data-id="${t.id}"></td>
+    <td class="muted">${t.id}</td>
+    <td>${t.cover_url ? `<img class="cover-thumb" src="${esc(t.cover_url)}" loading="lazy">` : '<div class="cover-thumb"></div>'}</td>
+    <td class="title-cell"><div>${esc(t.title)}${t.vip ? '<span class="badge vip">VIP</span>' : ""}</div>
+      <div class="muted" style="font-size:12px">${esc(t.artist)}${t.album ? " · " + esc(t.album) : ""}</div></td>
+    <td><span class="badge ${esc(t.source)}">${esc(t.source_label)}</span></td>
+    <td>${t.tag ? `<span class="badge tag">${esc(t.tag)}</span>` : '<span class="muted">—</span>'}</td>
+    <td><span class="badge ${t.enabled ? "on" : "off"}">${t.enabled ? "启用" : "停用"}</span></td>
+    <td>${t.audio_url ? `<audio class="preview" src="${esc(t.audio_url)}" controls preload="none"></audio>` : '<span class="muted">无音频</span>'}</td>
+    <td>
+      <button class="btn small" data-act="fill" data-id="${t.id}" title="按来源重拉缺失的封面/歌词">补全</button>
+      <button class="btn small" data-act="lyric" data-id="${t.id}">歌词</button>
+      <button class="btn small" data-act="toggle" data-id="${t.id}">${t.enabled ? "停用" : "启用"}</button>
+      <button class="btn small danger" data-act="del" data-id="${t.id}">删除</button>
+    </td>
+  </tr>`).join("");
+}
+$("#check-all").onchange = e => $$(".lib-check").forEach(cb => cb.checked = e.target.checked);
+$("#lib-reload").onclick = loadLibrary;
+
+function checkedIds() { return $$(".lib-check:checked").map(cb => Number(cb.dataset.id)); }
+$("#tag-apply").onclick = () => batchTag(true);
+$("#tag-clear").onclick = () => batchTag(false);
+async function batchTag(apply) {
+  const ids = checkedIds();
+  if (!ids.length) return toast("请先勾选曲目", true);
+  const tag = apply ? $("#tag-input").value.trim() : "";
+  if (apply && !tag) return toast("请输入标签名", true);
+  try { await jpost("/library/tag", { ids, tag }); toast("标签已更新"); loadLibrary(); }
+  catch (e) { toast(e.message, true); }
+}
+
+let lyricId = 0;
+$("#lib-body").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const id = Number(btn.dataset.id);
+  const t = libList.find(x => x.id === id);
+  if (btn.dataset.act === "fill") {
+    try { btn.disabled = true; btn.textContent = "…"; const d = await jpost("/library/fill", { id }); toast(`封面：${d.cover === "ok" ? "已补" : d.cover === "fail" ? "失败" : "已有"}，歌词：${d.lyric === "ok" ? "已补" : d.lyric === "fail" ? "失败" : "已有"}`); loadLibrary(); }
+    catch (err) { toast(err.message, true); }
+  } else if (btn.dataset.act === "lyric") {
+    lyricId = id;
+    $("#lyric-title").textContent = `编辑歌词 · ${t ? t.title : "#" + id}`;
+    $("#lyric-text").value = "";
+    // 拉取完整歌词
+    try {
+      const d = await (await fetch(location.origin + "/track/" + id)).json();
+      $("#lyric-text").value = (d.data && d.data.lyric) || "";
+    } catch { /* 忽略 */ }
+    $("#lyric-modal").style.display = "flex";
+  } else if (btn.dataset.act === "toggle") {
+    try { await jpost("/library/toggle", { id, enabled: !(t && t.enabled) }); loadLibrary(); }
+    catch (err) { toast(err.message, true); }
+  } else if (btn.dataset.act === "del") {
+    if (!confirm(`确定删除「${t ? t.title : id}」？音频和封面会一起从 R2 清掉`)) return;
+    try { await jpost("/library/delete", { id }); toast("已删除"); loadLibrary(); }
+    catch (err) { toast(err.message, true); }
+  }
+});
+$("#lyric-cancel").onclick = () => $("#lyric-modal").style.display = "none";
+$("#lyric-save").onclick = async () => {
+  try { await jpost("/library/edit", { id: lyricId, lyric: $("#lyric-text").value }); toast("歌词已保存"); $("#lyric-modal").style.display = "none"; loadLibrary(); }
+  catch (e) { toast(e.message, true); }
+};
+
+/* ---------- 授权管理 ---------- */
+async function loadKeys() {
+  try {
+    const d = await api("/keys");
+    $("#keys-total").textContent = `共 ${d.total} 个`;
+    const body = $("#keys-body");
+    if (!d.list.length) { body.innerHTML = '<tr><td colspan="7" class="empty">还没有 ApiKey，先为博客创建一个</td></tr>'; return; }
+    body.innerHTML = d.list.map(k => `<tr>
+      <td class="muted">${k.id}</td>
+      <td>${esc(k.name)}</td>
+      <td><div class="key-cell"><span class="mono">${esc(k.api_key)}</span><button class="btn small" data-act="copy" data-key="${esc(k.api_key)}">复制</button></div></td>
+      <td><span class="badge ${k.enabled ? "on" : "off"}">${k.enabled ? "启用" : "停用"}</span></td>
+      <td>${k.calls}</td>
+      <td class="muted" style="font-size:12px">${esc(k.last_used || "—")}</td>
+      <td>
+        <button class="btn small" data-act="toggle" data-id="${k.id}" data-en="${k.enabled ? 1 : 0}">${k.enabled ? "停用" : "启用"}</button>
+        <button class="btn small danger" data-act="del" data-id="${k.id}">删除</button>
+      </td>
+    </tr>`).join("");
+  } catch (e) { $("#keys-body").innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
+$("#key-create").onclick = async () => {
+  const name = $("#key-name").value.trim();
+  if (!name) return toast("请填写项目备注", true);
+  try {
+    const d = await jpost("/keys", { name });
+    $("#key-name").value = "";
+    toast(`已创建：${d.api_key}`);
+    loadKeys();
+  } catch (e) { toast(e.message, true); }
+};
+$("#keys-body").addEventListener("click", async e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  if (btn.dataset.act === "copy") {
+    try { await navigator.clipboard.writeText(btn.dataset.key); toast("已复制"); }
+    catch { prompt("手动复制：", btn.dataset.key); }
+  } else if (btn.dataset.act === "toggle") {
+    try { await jpost("/keys/toggle", { id: Number(btn.dataset.id), enabled: btn.dataset.en !== "1" }); loadKeys(); }
+    catch (err) { toast(err.message, true); }
+  } else if (btn.dataset.act === "del") {
+    if (!confirm("确定删除这个 Key？对应项目会立即无法调用服务")) return;
+    try { await jpost("/keys/delete", { id: Number(btn.dataset.id) }); loadKeys(); }
+    catch (err) { toast(err.message, true); }
+  }
+});
+
+/* ---------- 设置 ---------- */
+async function loadSettings() {
+  try { const d = await api("/settings"); $("#set-r2").value = d.r2_domain || ""; } catch { /* 忽略 */ }
+}
+$("#set-save").onclick = async () => {
+  try { await jpost("/settings", { r2_domain: $("#set-r2").value.trim() }); toast("设置已保存"); }
+  catch (e) { toast(e.message, true); }
+};
+$("#pwd-save").onclick = async () => {
+  const oldP = $("#pwd-old").value, newP = $("#pwd-new").value;
+  if (!oldP || !newP) return toast("请填写原密码和新密码", true);
+  try { await jpost("/password", { old_password: oldP, new_password: newP }); $("#pwd-old").value = ""; $("#pwd-new").value = ""; toast("密码已修改"); }
+  catch (e) { toast(e.message, true); }
+};
+
+boot();
+</script>
+</body>
+</html>

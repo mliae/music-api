@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "music-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  // 默认启用 workers.dev 子域名；自定义域名在 Dashboard 绑定（不受部署覆盖）
+  "workers_dev": true,
+  // 后台管理页面（public/admin.html）：命中静态文件直接由 assets 服务，其余落到 Worker
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS"
+  },
+  // D1 自动 provisioning（wrangler 4.45+）：省略 database_id，部署时按名创建/复用；
+  // Worker 启动后 ensureSchema() 幂等建表，migrations/ 供 CLI 使用，二者不冲突
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "music-api-db",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 与博客共享同一个 R2 桶（music/ 前缀），已存在则复用
+  "r2_buckets": [
+    {
+      "binding": "R2",
+      "bucket_name": "moments-storage"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {}
+}
