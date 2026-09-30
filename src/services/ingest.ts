@@ -269,32 +269,33 @@ export async function fetchLyric(
   return neHits[0] ? getLyricSafe(neHits[0].songId) : "";
 }
 
-/** 试听地址解析：返回可直接给 <audio> 播放的 URL；VIP 歌自然只会播出试听片段 */
+/** 试听地址解析：返回可直接给 <audio> 播放的 URL + VIP 标识；
+ *  汽水 VIP 歌曲只会播出试听片段 */
 export async function resolvePreviewUrl(
   source: MusicSource,
   id: string,
   title: string,
   artist: string
-): Promise<string | null> {
+): Promise<{ url: string | null; vip?: boolean }> {
   if (source === "netease") {
     const outer = await getOuterUrl(id);
-    return outer || `https://api.injahow.cn/meting/?server=netease&type=url&id=${encodeURIComponent(id)}`;
+    return { url: outer || `https://api.injahow.cn/meting/?server=netease&type=url&id=${encodeURIComponent(id)}` };
   }
   if (source === "qq") {
-    return `https://api.injahow.cn/meting/?server=tencent&type=url&id=${encodeURIComponent(id)}`;
+    return { url: `https://api.injahow.cn/meting/?server=tencent&type=url&id=${encodeURIComponent(id)}` };
   }
   if (source === "kugou") {
-    return `https://api.qijieya.cn/meting/?server=kugou&type=url&id=${encodeURIComponent(id)}`;
+    return { url: `https://api.qijieya.cn/meting/?server=kugou&type=url&id=${encodeURIComponent(id)}` };
   }
   if (source === "qishui") {
     const p = await parseQishui(id).catch(() => null);
-    if (p?.best?.url) return String(p.best.url);
+    if (p?.best?.url) return { url: String(p.best.url), vip: p.vip_only === true };
     // 解析失败则跨平台兜底
   }
   // 酷我 / 汽水兜底：按「歌名 歌手」到网易云找同名音源
-  if (!title) return null;
+  if (!title) return { url: null };
   const neHits = await searchNetease(`${title} ${artist}`.trim(), 1);
-  if (!neHits[0]) return null;
+  if (!neHits[0]) return { url: null };
   const outer = await getOuterUrl(neHits[0].songId);
-  return outer || `https://api.injahow.cn/meting/?server=netease&type=url&id=${encodeURIComponent(neHits[0].songId)}`;
+  return { url: outer || `https://api.injahow.cn/meting/?server=netease&type=url&id=${encodeURIComponent(neHits[0].songId)}` };
 }

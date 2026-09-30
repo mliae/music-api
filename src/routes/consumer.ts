@@ -18,7 +18,7 @@ import { searchNetease } from "../platforms/netease";
 import { searchQQ } from "../platforms/qq";
 import { searchKugou } from "../platforms/kugou";
 import { searchKuwo } from "../platforms/kuwo";
-import { searchQishui, parseQishui, type ParsedQishui } from "../platforms/qishui";
+import { searchQishui, parseQishui } from "../platforms/qishui";
 import {
   AUDIO_MIME,
   MAX_AUDIO_BYTES,
@@ -27,9 +27,16 @@ import {
   fetchLyric,
   looksLikeImage,
   newKey,
-  resolveAudio,
   resolvePreviewUrl,
 } from "../services/ingest";
+import {
+  INGEST_STAGES,
+  createJob,
+  getJob,
+  performIngest,
+  runIngestJob,
+  type IngestBody,
+} from "../services/ingestJob";
 import { UA } from "../platforms/types";
 
 const app = new Hono<HonoEnv>();
@@ -69,68 +76,67 @@ app.get("/resolve", async c => {
   if (!source || !id || !/^[A-Za-z0-9_-]+$/.test(id)) return fail(c, "参数错误", 400);
   const title = (c.req.query("title") || "").trim();
   const artist = (c.req.query("artist") || "").trim();
-  const url = await resolvePreviewUrl(source, id, title, artist);
+  const { url, vip } = await resolvePreviewUrl(source, id, title, artist);
   if (!url) return fail(c, "未找到可用音源，无法试听", 404);
-  return ok(c, { url });
+  return ok(c, { url, vip: vip === true });
 });
 
-/** 搜索结果入库：POST /ingest { source, songId, title?, artist?, album?, cover?, vip?, duration? } */
+/** 搜索结果入库（同步，博客等消费方使用）：POST /ingest { source, songId, ... } */
 app.post("/ingest", async c => {
   const body = await c.req.json().catch(() => null);
   const source = parseSource(body?.source);
   const songId = String(body?.songId ?? body?.id ?? "").trim();
   if (!source) return fail(c, "未知来源", 400);
   if (!songId) return fail(c, "参数错误", 400);
-
-  // 同源同 ID 防重复
-  const dup = await c.env.DB.prepare("SELECT id FROM tracks WHERE source = ? AND source_id = ?")
-    .bind(source, songId)
-    .first<{ id: number }>();
-  if (dup) return ok(c, { id: dup.id, duplicate: true }, "该歌曲已在音乐库中");
-
-  // 汽水：先解析拿元数据（歌名/歌手/专辑/封面/歌词/时长以解析为准）
-  let qishuiParsed: ParsedQishui | null = null;
-  if (source === "qishui") {
-    qishuiParsed = await parseQishui(songId).catch(() => null);
-    if (!qishuiParsed) return fail(c, "汽水解析失败：歌曲不存在或已下架", 502);
+  const payload: IngestBody = {
+    source,
+    songId,
+    title: body?.title,
+    artist: body?.artist,
+    album: body?.album,
+    cover: body?.cover,
+    vip: body?.vip,
+    duration: body?.duration,
+  };
+  try {
+    const result = await performIngest(c.env, payload);
+    if (result.duplicate) return ok(c, { id: result.id, duplicate: true }, "该歌曲已在音乐库中");
+    return ok(c, { id: result.id, title: result.title, via: result.via }, "入库成功（音频/封面/歌词已存 R2）");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "入库失败";
+    return fail(c, msg, msg === "缺少歌名" ? 400 : 502);
   }
+});
 
-  const title = String(body?.title ?? "").trim() || qishuiParsed?.title || "";
-  const artist = String(body?.artist ?? "").trim() || qishuiParsed?.artist || "";
-  const album = String(body?.album ?? "").trim() || qishuiParsed?.album || "";
-  const coverUrl = String(body?.cover ?? "").trim() || qishuiParsed?.cover || "";
-  const vip = body?.vip ? 1 : qishuiParsed?.vip_only ? 1 : 0;
-  const duration = Number(body?.duration ?? 0) || qishuiParsed?.duration_s || 0;
-  if (!title) return fail(c, "缺少歌名", 400);
+/** 异步入库（后台进度弹窗用）：POST /ingest/async → 立即返回 job_id，执行器 waitUntil 后台跑 */
+app.post("/ingest/async", async c => {
+  const body = await c.req.json().catch(() => null);
+  const source = parseSource(body?.source);
+  const songId = String(body?.songId ?? body?.id ?? "").trim();
+  if (!source) return fail(c, "未知来源", 400);
+  if (!songId) return fail(c, "参数错误", 400);
+  const payload: IngestBody = {
+    source,
+    songId,
+    title: body?.title,
+    artist: body?.artist,
+    album: body?.album,
+    cover: body?.cover,
+    vip: body?.vip,
+    duration: body?.duration,
+  };
+  const jobId = await createJob(c.env.DB, payload);
+  c.executionCtx.waitUntil(runIngestJob(c.env, jobId));
+  return ok(c, { job_id: jobId }, "任务已提交");
+});
 
-  const resolved = await resolveAudio(songId, source, title, artist, qishuiParsed);
-  if (!resolved) return fail(c, "解析失败：所有音源均不可用（VIP 付费或已下架），未入库", 502);
-
-  const [coverRes, lyric] = await Promise.all([
-    downloadCover(coverUrl, source, songId, title, artist, qishuiParsed),
-    fetchLyric(source, songId, title, artist, qishuiParsed),
-  ]);
-
-  const ext = audioExt(resolved.buf);
-  const audioKey = newKey("audio", ext);
-  await c.env.R2.put(audioKey, resolved.buf, {
-    httpMetadata: { contentType: AUDIO_MIME[ext] || "audio/mpeg" },
-  });
-
-  let coverKey = "";
-  if (coverRes) {
-    coverKey = newKey("cover", coverRes.ext);
-    await c.env.R2.put(coverKey, coverRes.buf, {
-      httpMetadata: { contentType: `image/${coverRes.ext === "jpg" ? "jpeg" : coverRes.ext}` },
-    });
-  }
-
-  const r = await c.env.DB.prepare(
-    "INSERT INTO tracks (title, artist, album, source, source_id, vip, audio_key, cover_key, lyric, duration) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  )
-    .bind(title, artist, album, source, songId, vip, audioKey, coverKey, lyric, duration)
-    .run();
-  return ok(c, { id: r.meta.last_row_id, title, artist, via: resolved.via }, "入库成功（音频/封面/歌词已存 R2）");
+/** 任务进度轮询：GET /ingest/progress/:id → status/stage/error/result_id */
+app.get("/ingest/progress/:id", async c => {
+  const id = c.req.param("id") || "";
+  if (!/^[a-z0-9]{8,20}$/.test(id)) return fail(c, "参数错误", 400);
+  const job = await getJob(c.env.DB, id);
+  if (!job) return fail(c, "任务不存在", 404);
+  return ok(c, { stages: INGEST_STAGES, ...job });
 });
 
 /** 本地上传入库：POST /ingest/upload（multipart: file, title?, artist?, cover?） */

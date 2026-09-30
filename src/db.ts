@@ -52,6 +52,18 @@ const SCHEMA_STMTS = [
 )`,
   "CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags (tag)",
   "CREATE INDEX IF NOT EXISTS idx_track_tags_track ON track_tags (track_id)",
+  // 异步入库任务：进度轮询的单一事实源
+  `CREATE TABLE IF NOT EXISTS ingest_jobs (
+  id         TEXT PRIMARY KEY,
+  status     TEXT NOT NULL DEFAULT 'running',
+  stage      INTEGER NOT NULL DEFAULT 0,
+  error      TEXT NOT NULL DEFAULT '',
+  result_id  INTEGER,
+  via        TEXT NOT NULL DEFAULT '',
+  payload    TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+)`,
 ];
 
 let schemaPromise: Promise<void> | null = null;

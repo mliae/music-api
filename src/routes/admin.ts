@@ -27,6 +27,8 @@ import {
   setAdminPassword,
   verifyAdminPassword,
 } from "../auth";
+import { parseQishui } from "../platforms/qishui";
+import { fetchLyric } from "../services/ingest";
 import consumer from "./consumer";
 
 const app = new Hono<HonoEnv>();
@@ -71,6 +73,96 @@ app.use("/*", requireAdmin);
 
 /** 曲库管理复用消费方 handler（搜索/入库/列表/标签/歌词/启停/删除） */
 app.route("/", consumer);
+
+/** 试听音频代理：GET /admin/api/stream?url=xxx
+ *  汽水等平台直链有防盗链，浏览器 <audio> 直接请求 403，
+ *  通过 Worker 代理 fetch 绕过 */
+app.get("/stream", async c => {
+  const url = c.req.query("url") || "";
+  if (!/^https?:\/\//i.test(url)) return fail(c, "参数错误", 400);
+  const resp = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+  });
+  if (!resp.ok) return fail(c, `音频获取失败 HTTP ${resp.status}`, 502);
+  const ct = resp.headers.get("Content-Type") || "audio/mpeg";
+  const cl = resp.headers.get("Content-Length") || "";
+  return new Response(resp.body, {
+    headers: {
+      "Content-Type": ct,
+      "Cache-Control": "no-store",
+      ...(cl ? { "Content-Length": cl } : {}),
+      "Accept-Ranges": "bytes",
+    },
+  });
+});
+
+/** 粘贴链接/ID 直接解析（汽水）：GET /parse?input=xxx → 歌曲元信息，前端据此打开详情卡 */
+app.get("/parse", async c => {
+  const input = (c.req.query("input") || "").trim();
+  if (!input) return fail(c, "请粘贴歌曲链接或 ID", 400);
+  const p = await parseQishui(input).catch(() => null);
+  if (!p) return fail(c, "解析失败：请确认是汽水音乐的歌曲链接或歌曲 ID", 502);
+  return ok(c, {
+    source: "qishui",
+    songId: p.id,
+    title: p.title,
+    artist: p.artist,
+    album: p.album,
+    cover: p.cover,
+    duration: p.duration_s,
+    vip: p.vip_only,
+  });
+});
+
+/** 歌曲详情补充：GET /songinfo?source=&id=&title=&artist= → { lyric, tiers, vip }
+ *  汽水：一次解析同时拿歌词与多档音质；其他平台只取歌词（复用入库同款歌词链路） */
+app.get("/songinfo", async c => {
+  const q = new URL(c.req.url).searchParams;
+  const source = (q.get("source") || "").trim();
+  const id = (q.get("id") || "").trim();
+  const title = (q.get("title") || "").trim();
+  const artist = (q.get("artist") || "").trim();
+  if (!id) return fail(c, "参数错误", 400);
+  if (source === "qishui") {
+    const p = await parseQishui(id).catch(() => null);
+    if (!p) return ok(c, { lyric: "", tiers: [], vip: false });
+    const tiers = (p.audio || [])
+      .filter(a => a.url)
+      .map(a => ({
+        label: String(a.quality_cn || a.quality || "音频"),
+        bitrate: Number(a.bitrate || 0),
+        size: Number(a.size || 0),
+        url: String(a.url),
+        need_vip: !!a.need_vip,
+      }));
+    return ok(c, { lyric: p.lyric || "", tiers, vip: p.vip_only === true });
+  }
+  const lyric = await fetchLyric(source, id, title, artist).catch(() => "");
+  return ok(c, { lyric: lyric || "", tiers: [], vip: false });
+});
+
+/** 下载代理：GET /download?u=直链&name=文件名 → 强制 attachment（绕防盗链 + 中文文件名 + 自动补扩展名） */
+app.get("/download", async c => {
+  const url = c.req.query("u") || "";
+  const name = (c.req.query("name") || "").replace(/[\\/:*?"<>|]/g, "_").trim().slice(0, 120) || "download";
+  if (!/^https?:\/\//i.test(url)) return fail(c, "参数错误", 400);
+  const resp = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+  });
+  if (!resp.ok) return fail(c, `下载失败 HTTP ${resp.status}`, 502);
+  const ct = (resp.headers.get("Content-Type") || "application/octet-stream").split(";")[0].trim();
+  // 文件名没带扩展名时按 Content-Type 补
+  const finalName = /\.[a-z0-9]{2,5}$/i.test(name)
+    ? name
+    : `${name}.${({ "audio/mp4": "m4a", "audio/aac": "aac", "audio/mpeg": "mp3", "audio/flac": "flac", "audio/wav": "wav", "audio/ogg": "ogg", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "text/plain": "lrc" } as Record<string, string>)[ct] || "bin"}`;
+  return new Response(resp.body, {
+    headers: {
+      "Content-Type": ct,
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(finalName)}`,
+      "Cache-Control": "no-store",
+    },
+  });
+});
 
 /** ApiKey 列表 */
 app.get("/keys", async c => {
